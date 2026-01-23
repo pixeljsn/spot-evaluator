@@ -46,7 +46,8 @@ func (pc *PriceClient) GetSpotPrice(ctx context.Context, instType, az string) (f
 }
 
 func (pc *PriceClient) GetOnDemandPrice(ctx context.Context, instType, region string) (float64, error) {
-	// Simplified filter for the Pricing API
+	// AWS Pricing uses "US East (N. Virginia)" instead of "us-east-1"
+	// For now, we assume standard "Linux" and "Shared" tenancy
 	filters := []ptypes.Filter{
 		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("instanceType"), Value: aws.String(instType)},
 		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("regionCode"), Value: aws.String(region)},
@@ -61,10 +62,33 @@ func (pc *PriceClient) GetOnDemandPrice(ctx context.Context, instType, region st
 		Filters:     filters,
 	})
 	if err != nil || len(out.PriceList) == 0 {
+		return 0, fmt.Errorf("no on-demand price found")
+	}
+
+	// 1. The PriceList is a slice of JSON strings. Parse the first one.
+	var pList awsPriceList
+	if err := json.Unmarshal([]byte(out.PriceList[0]), &pList); err != nil {
 		return 0, err
 	}
 
-	// Parsing the PriceList JSON is complex; for this tool, we look for the "OnDemand" term
-	// In a production tool, you'd use a more robust JSON path parser
-	return 0.1, nil // Placeholder: Logic to extract price from PriceList[0] JSON string
+	// 2. Navigate the "Terms -> OnDemand -> Offer -> PriceDimensions" nesting
+	for _, offer := range pList.Terms.OnDemand {
+		for _, dimension := range offer.PriceDimensions {
+			priceStr := dimension.PricePerUnit["USD"]
+			return strconv.ParseFloat(priceStr, 64)
+		}
+	}
+
+	return 0, fmt.Errorf("price dimensions not found in JSON")
+}
+
+type awsPriceList struct {
+	Terms struct {
+		OnDemand map[string]map[string]struct {
+			PriceDimensions map[string]struct {
+				PricePerUnit map[string]string `json:"pricePerUnit"`
+				Unit         string            `json:"unit"`
+			} `json:"priceDimensions"`
+		} `json:"OnDemand"`
+	} `json:"terms"`
 }
