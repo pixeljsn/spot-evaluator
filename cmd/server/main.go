@@ -35,8 +35,26 @@ func main() {
 	fmt.Printf("\n%-15s %-12s %-8s %-15s\n", "INSTANCE", "AZ", "COUNT", "SPOT PRICE")
 	fmt.Println("---------------------------------------------------------")
 
-	for _, item := range inventory {
-		spot, _ := priceClient.GetSpotPrice(context.TODO(), item.InstanceType, item.AZ)
-		fmt.Printf("%-15s %-12s %-8d $%-15.4f\n", item.InstanceType, item.AZ, item.Count, spot)
-	}
+	// for _, item := range inventory {
+	// 	spot, _ := priceClient.GetSpotPrice(context.TODO(), item.InstanceType, item.AZ)
+	// 	fmt.Printf("%-15s %-12s %-8d $%-15.4f\n", item.InstanceType, item.AZ, item.Count, spot)
+	// }
+
+	// Inside your main function loop:
+   for _, item := range inventory {
+    // 1. Get Spot Price
+    spot, _ := priceClient.GetSpotPrice(context.TODO(), item.InstanceType, item.AZ)
+    
+    // 2. Get On-Demand Price
+    onDemand, _ := priceClient.GetOnDemandPrice(context.TODO(), item.InstanceType, item.Region)
+
+    // 3. Calculate Savings
+    savings := 0.0
+    if onDemand > 0 {
+        savings = ((onDemand - spot) / onDemand) * 100
+    }
+
+    fmt.Printf("%-15s %-12s $%-10.4f $%-10.4f %-5.2f%%\n", 
+        item.InstanceType, item.AZ, onDemand, spot, savings)
+}
 }
