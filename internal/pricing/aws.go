@@ -14,16 +14,28 @@ import (
 	ptypes "github.com/aws/aws-sdk-go-v2/service/pricing/types"
 )
 
+// PriceListResponse handles the nested dynamic keys from AWS JSON
+type PriceListResponse struct {
+	Terms struct {
+		OnDemand map[string]map[string]struct {
+			PriceDimensions map[string]struct {
+				Unit         string            `json:"unit"`
+				PricePerUnit map[string]string `json:"pricePerUnit"`
+			} `json:"priceDimensions"`
+		} `json:"OnDemand"`
+	} `json:"terms"`
+}
+
 type PriceClient struct {
 	EC2Client     *ec2.Client
 	PricingClient *pricing.Client
 }
 
 func NewPriceClient(cfg aws.Config) *PriceClient {
-	// Pricing API is only available in us-east-1 or ap-south-1
+	// Pricing API ONLY works in us-east-1
 	pricingCfg := cfg.Copy()
 	pricingCfg.Region = "us-east-1"
-	
+
 	return &PriceClient{
 		EC2Client:     ec2.NewFromConfig(cfg),
 		PricingClient: pricing.NewFromConfig(pricingCfg),
@@ -32,11 +44,11 @@ func NewPriceClient(cfg aws.Config) *PriceClient {
 
 func (pc *PriceClient) GetSpotPrice(ctx context.Context, instType, az string) (float64, error) {
 	input := &ec2.DescribeSpotPriceHistoryInput{
-		InstanceTypes: []ec2types.InstanceType{ec2types.InstanceType(instType)},
-		AvailabilityZone: aws.String(az),
+		InstanceTypes:       []ec2types.InstanceType{ec2types.InstanceType(instType)},
+		AvailabilityZone:    aws.String(az),
 		ProductDescriptions: []string{"Linux/UNIX"},
-		StartTime: aws.Time(time.Now()),
-		MaxResults: aws.Int32(1),
+		StartTime:           aws.Time(time.Now()),
+		MaxResults:          aws.Int32(1),
 	}
 	out, err := pc.EC2Client.DescribeSpotPriceHistory(ctx, input)
 	if err != nil || len(out.SpotPriceHistory) == 0 {
@@ -46,15 +58,16 @@ func (pc *PriceClient) GetSpotPrice(ctx context.Context, instType, az string) (f
 }
 
 func (pc *PriceClient) GetOnDemandPrice(ctx context.Context, instType, region string) (float64, error) {
-	// AWS Pricing uses "US East (N. Virginia)" instead of "us-east-1"
-	// For now, we assume standard "Linux" and "Shared" tenancy
+	// Map region code (us-east-1) to Location Name (US East (N. Virginia))
+	// In a full tool, use a helper map. For testing, we use GetProducts filters.
 	filters := []ptypes.Filter{
-		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("instanceType"), Value: aws.String(instType)},
-		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("regionCode"), Value: aws.String(region)},
-		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("operatingSystem"), Value: aws.String("Linux")},
-		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("preInstalledSw"), Value: aws.String("NA")},
-		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("tenancy"), Value: aws.String("Shared")},
-		{Type: ptypes.FilterTypeTermMatch, Field: aws.String("capacitystatus"), Value: aws.String("Used")},
+		{Field: aws.String("ServiceCode"), Type: ptypes.FilterTypeTermMatch, Value: aws.String("AmazonEC2")},
+		{Field: aws.String("instanceType"), Type: ptypes.FilterTypeTermMatch, Value: aws.String(instType)},
+		{Field: aws.String("regionCode"), Type: ptypes.FilterTypeTermMatch, Value: aws.String(region)},
+		{Field: aws.String("operatingSystem"), Type: ptypes.FilterTypeTermMatch, Value: aws.String("Linux")},
+		{Field: aws.String("tenancy"), Type: ptypes.FilterTypeTermMatch, Value: aws.String("Shared")},
+		{Field: aws.String("preInstalledSw"), Type: ptypes.FilterTypeTermMatch, Value: aws.String("NA")},
+		{Field: aws.String("capacitystatus"), Type: ptypes.FilterTypeTermMatch, Value: aws.String("Used")},
 	}
 
 	out, err := pc.PricingClient.GetProducts(ctx, &pricing.GetProductsInput{
@@ -62,33 +75,25 @@ func (pc *PriceClient) GetOnDemandPrice(ctx context.Context, instType, region st
 		Filters:     filters,
 	})
 	if err != nil || len(out.PriceList) == 0 {
-		return 0, fmt.Errorf("no on-demand price found")
+		return 0, fmt.Errorf("no on-demand price found for %s", instType)
 	}
 
-	// 1. The PriceList is a slice of JSON strings. Parse the first one.
-	var pList awsPriceList
-	if err := json.Unmarshal([]byte(out.PriceList[0]), &pList); err != nil {
+	// Double Parse: out.PriceList[0] is a JSON string
+	var priceData PriceListResponse
+	if err := json.Unmarshal([]byte(out.PriceList[0]), &priceData); err != nil {
 		return 0, err
 	}
 
-	// 2. Navigate the "Terms -> OnDemand -> Offer -> PriceDimensions" nesting
-	for _, offer := range pList.Terms.OnDemand {
-		for _, dimension := range offer.PriceDimensions {
-			priceStr := dimension.PricePerUnit["USD"]
-			return strconv.ParseFloat(priceStr, 64)
+	// Walk the dynamic map: SKU -> OfferID -> DimensionID
+	for _, skuMap := range priceData.Terms.OnDemand {
+		for _, offer := range skuMap {
+			for _, dimension := range offer.PriceDimensions {
+				if val, ok := dimension.PricePerUnit["USD"]; ok {
+					return strconv.ParseFloat(val, 64)
+				}
+			}
 		}
 	}
 
-	return 0, fmt.Errorf("price dimensions not found in JSON")
-}
-
-type awsPriceList struct {
-	Terms struct {
-		OnDemand map[string]map[string]struct {
-			PriceDimensions map[string]struct {
-				PricePerUnit map[string]string `json:"pricePerUnit"`
-				Unit         string            `json:"unit"`
-			} `json:"priceDimensions"`
-		} `json:"OnDemand"`
-	} `json:"terms"`
+	return 0, fmt.Errorf("could not find price dimension")
 }
