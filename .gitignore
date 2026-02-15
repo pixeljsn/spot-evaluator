@@ -1,0 +1,11 @@
+# Go build artifacts
+bin/
+*.test
+*.out
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
