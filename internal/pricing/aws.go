@@ -260,3 +260,120 @@ func isReplacementCompatible(current, candidate ec2types.InstanceTypeInfo) bool 
 
 	return true
 }
+
+func (pc *PriceClient) GetReplacementOptions(ctx context.Context, group models.NodeGroup, limit int) ([]models.ReplacementOption, error) {
+	currentSpec, err := pc.describeInstanceType(ctx, group.InstanceType)
+	if err != nil {
+		return nil, err
+	}
+
+	currentSpotPrice, err := pc.GetSpotPrice(ctx, group.InstanceType, group.AZ)
+	if err != nil {
+		return nil, err
+	}
+
+	offered, err := pc.listInstanceTypeOfferings(ctx, group.AZ)
+	if err != nil {
+		return nil, err
+	}
+
+	candidateTypes := make([]string, 0, len(offered))
+	for _, offeredType := range offered {
+		if offeredType == group.InstanceType {
+			continue
+		}
+		candidateTypes = append(candidateTypes, offeredType)
+	}
+
+	options := make([]models.ReplacementOption, 0)
+	for _, candidateType := range candidateTypes {
+		spec, err := pc.describeInstanceType(ctx, candidateType)
+		if err != nil || !isReplacementCompatible(currentSpec, spec) {
+			continue
+		}
+
+		candidateSpot, err := pc.GetSpotPrice(ctx, candidateType, group.AZ)
+		if err != nil || candidateSpot >= currentSpotPrice {
+			continue
+		}
+
+		savingsPerNode := currentSpotPrice - candidateSpot
+		options = append(options, models.ReplacementOption{
+			InstanceType:           candidateType,
+			SpotPrice:              candidateSpot,
+			SavingsPerNodePerHour:  savingsPerNode,
+			SavingsPerGroupPerHour: savingsPerNode * float64(group.Count),
+		})
+	}
+
+	sort.Slice(options, func(i, j int) bool {
+		return options[i].SavingsPerGroupPerHour > options[j].SavingsPerGroupPerHour
+	})
+
+	if len(options) > limit {
+		return options[:limit], nil
+	}
+
+	return options, nil
+}
+
+func (pc *PriceClient) listInstanceTypeOfferings(ctx context.Context, az string) ([]string, error) {
+	paginator := ec2.NewDescribeInstanceTypeOfferingsPaginator(pc.EC2Client, &ec2.DescribeInstanceTypeOfferingsInput{
+		LocationType: ec2types.LocationTypeAvailabilityZone,
+		Filters: []ec2types.Filter{{
+			Name:   aws.String("location"),
+			Values: []string{az},
+		}},
+	})
+
+	offeredMap := make(map[string]struct{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, offering := range page.InstanceTypeOfferings {
+			offeredMap[string(offering.InstanceType)] = struct{}{}
+		}
+	}
+
+	offered := make([]string, 0, len(offeredMap))
+	for instType := range offeredMap {
+		offered = append(offered, instType)
+	}
+
+	return offered, nil
+}
+
+func (pc *PriceClient) describeInstanceType(ctx context.Context, instType string) (ec2types.InstanceTypeInfo, error) {
+	out, err := pc.EC2Client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{
+		InstanceTypes: []ec2types.InstanceType{ec2types.InstanceType(instType)},
+	})
+	if err != nil {
+		return ec2types.InstanceTypeInfo{}, err
+	}
+	if len(out.InstanceTypes) == 0 {
+		return ec2types.InstanceTypeInfo{}, fmt.Errorf("instance type %s not found", instType)
+	}
+	return out.InstanceTypes[0], nil
+}
+
+func isReplacementCompatible(current, candidate ec2types.InstanceTypeInfo) bool {
+	if aws.ToBool(candidate.BareMetal) || aws.ToBool(candidate.FreeTierEligible) {
+		return false
+	}
+
+	if current.VCpuInfo == nil || candidate.VCpuInfo == nil || current.MemoryInfo == nil || candidate.MemoryInfo == nil {
+		return false
+	}
+
+	if aws.ToInt32(candidate.VCpuInfo.DefaultVCpus) < aws.ToInt32(current.VCpuInfo.DefaultVCpus) {
+		return false
+	}
+
+	if aws.ToInt64(candidate.MemoryInfo.SizeInMiB) < aws.ToInt64(current.MemoryInfo.SizeInMiB) {
+		return false
+	}
+
+	return true
+}
