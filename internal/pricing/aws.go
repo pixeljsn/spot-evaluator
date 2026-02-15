@@ -100,44 +100,37 @@ func parseOnDemandUSDPrice(priceListItem string) (float64, error) {
 			continue
 		}
 
-		for _, offerRaw := range skuTerm {
-			offer, ok := offerRaw.(map[string]any)
+		priceDimensions, ok := skuTerm["priceDimensions"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		for _, dimensionRaw := range priceDimensions {
+			dimension, ok := dimensionRaw.(map[string]any)
 			if !ok {
 				continue
 			}
 
-			priceDimensions, ok := offer["priceDimensions"].(map[string]any)
+			pricePerUnit, ok := dimension["pricePerUnit"].(map[string]any)
 			if !ok {
 				continue
 			}
 
-			for _, dimensionRaw := range priceDimensions {
-				dimension, ok := dimensionRaw.(map[string]any)
-				if !ok {
-					continue
-				}
-
-				pricePerUnit, ok := dimension["pricePerUnit"].(map[string]any)
-				if !ok {
-					continue
-				}
-
-				usdRaw, ok := pricePerUnit["USD"]
-				if !ok {
-					continue
-				}
-
-				usd, ok := usdRaw.(string)
-				if !ok || usd == "" {
-					continue
-				}
-
-				price, err := strconv.ParseFloat(usd, 64)
-				if err != nil {
-					continue
-				}
-				return price, nil
+			usdRaw, ok := pricePerUnit["USD"]
+			if !ok {
+				continue
 			}
+
+			usd, ok := usdRaw.(string)
+			if !ok || usd == "" {
+				continue
+			}
+
+			price, err := strconv.ParseFloat(usd, 64)
+			if err != nil {
+				continue
+			}
+			return price, nil
 		}
 	}
 
