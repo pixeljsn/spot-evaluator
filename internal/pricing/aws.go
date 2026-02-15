@@ -203,7 +203,7 @@ func (pc *PriceClient) describeInstanceType(ctx context.Context, instType string
 }
 
 func isReplacementCompatible(current, candidate ec2types.InstanceTypeInfo) bool {
-	if candidate.BareMetal || candidate.FreeTierEligible {
+	if aws.ToBool(candidate.BareMetal) || aws.ToBool(candidate.FreeTierEligible) {
 		return false
 	}
 

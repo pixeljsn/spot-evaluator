@@ -120,7 +120,7 @@ go build -o bin/server ./cmd/server
 
 ### 6) Troubleshooting checklist
 
-- **`missing go.sum entry`**: run `go mod tidy` where dependency egress is allowed.
+- **`missing go.sum entry`**: this is typically caused by blocked module downloads (for example `proxy.golang.org` returning 403). Configure `GOPROXY` to an allowed proxy and rerun `go mod tidy`.
 - **Kubernetes auth errors**: check `KUBECONFIG` and current context.
 - **AWS AccessDenied**: validate IAM permissions listed above.
 - **No spot results for AZ/type**: verify the worker instance type and AZ are valid in your account/region.
