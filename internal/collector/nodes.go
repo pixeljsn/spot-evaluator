@@ -2,9 +2,9 @@ package collector
 
 import (
 	"context"
-	"spot-evaluator/pkg/models"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"spot-evaluator/pkg/models"
 )
 
 func GetInventory(clientset *kubernetes.Clientset) ([]models.NodeGroup, error) {
