@@ -27,6 +27,12 @@ go mod tidy
 go run ./cmd/spot-evaluator
 ```
 
+Backward-compatible legacy path (kept to reduce branch merge conflicts):
+
+```bash
+go run ./cmd/server
+```
+
 ## Review status in this environment
 
 I cannot pull from `main` in this execution environment because no git remote is configured for this local repository clone. To sync locally, run:
@@ -88,6 +94,12 @@ go env -w GOPROXY=https://<your-internal-go-proxy>,direct
 go run ./cmd/spot-evaluator
 ```
 
+Backward-compatible legacy path (kept to reduce branch merge conflicts):
+
+```bash
+go run ./cmd/server
+```
+
 Expected output sections:
 - current node-group pricing table (instance, AZ, count, on-demand, spot, savings %)
 - replacement recommendations with:
@@ -101,6 +113,9 @@ Expected output sections:
 ```bash
 go build -o bin/spot-evaluator ./cmd/spot-evaluator
 ./bin/spot-evaluator
+
+# legacy compatible build path
+go build -o bin/server ./cmd/server
 ```
 
 ### 6) Troubleshooting checklist
@@ -112,7 +127,8 @@ go build -o bin/spot-evaluator ./cmd/spot-evaluator
 
 ## Project Layout
 
-- `cmd/spot-evaluator/main.go` - CLI entrypoint for the `spot-evaluator` tool.
+- `cmd/spot-evaluator/main.go` - primary CLI entrypoint for the `spot-evaluator` tool.
+- `cmd/server/main.go` - legacy-compatible entrypoint retained to reduce merge conflicts with older branches.
 - `internal/collector/` - Kubernetes node inventory collection.
 - `internal/pricing/` - AWS Spot/On-Demand pricing and replacement logic.
 - `pkg/models/` - Shared data models.
