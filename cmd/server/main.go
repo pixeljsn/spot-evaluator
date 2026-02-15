@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 
 	"spot-evaluator/internal/collector"
@@ -17,14 +16,15 @@ import (
 )
 
 func main() {
-	// K8s Setup
-	home := homedir.HomeDir()
-	kubeconfig := filepath.Join(home, ".kube", "config")
-	config, _ := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	clientset, _ := kubernetes.NewForConfig(config)
+	clientset, err := newKubernetesClient()
+	if err != nil {
+		log.Fatalf("failed to create kubernetes client: %v", err)
+	}
 
-	// AWS Setup
-	awsCfg, _ := awsconfig.LoadDefaultConfig(context.TODO())
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatalf("failed to load aws config: %v", err)
+	}
 	priceClient := pricing.NewPriceClient(awsCfg)
 
 	inventory, err := collector.GetInventory(clientset)
@@ -32,29 +32,55 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("\n%-15s %-12s %-8s %-15s\n", "INSTANCE", "AZ", "COUNT", "SPOT PRICE")
-	fmt.Println("---------------------------------------------------------")
+	fmt.Printf("\n%-15s %-12s %-8s %-12s %-12s %-12s\n", "INSTANCE", "AZ", "COUNT", "ON-DEMAND", "SPOT", "SAVINGS")
+	fmt.Println("--------------------------------------------------------------------------------")
 
-	// for _, item := range inventory {
-	// 	spot, _ := priceClient.GetSpotPrice(context.TODO(), item.InstanceType, item.AZ)
-	// 	fmt.Printf("%-15s %-12s %-8d $%-15.4f\n", item.InstanceType, item.AZ, item.Count, spot)
-	// }
+	for _, item := range inventory {
+		spot, err := priceClient.GetSpotPrice(context.Background(), item.InstanceType, item.AZ)
+		if err != nil {
+			log.Printf("warning: failed to get spot price for %s/%s: %v", item.InstanceType, item.AZ, err)
+			continue
+		}
 
-	// Inside your main function loop:
-   for _, item := range inventory {
-    // 1. Get Spot Price
-    spot, _ := priceClient.GetSpotPrice(context.TODO(), item.InstanceType, item.AZ)
-    
-    // 2. Get On-Demand Price
-    onDemand, _ := priceClient.GetOnDemandPrice(context.TODO(), item.InstanceType, item.Region)
+		onDemand, err := priceClient.GetOnDemandPrice(context.Background(), item.InstanceType, item.Region)
+		if err != nil {
+			log.Printf("warning: failed to get on-demand price for %s/%s: %v", item.InstanceType, item.Region, err)
+			continue
+		}
 
-    // 3. Calculate Savings
-    savings := 0.0
-    if onDemand > 0 {
-        savings = ((onDemand - spot) / onDemand) * 100
-    }
+		savings := 0.0
+		if onDemand > 0 {
+			savings = ((onDemand - spot) / onDemand) * 100
+		}
 
-    fmt.Printf("%-15s %-12s $%-10.4f $%-10.4f %-5.2f%%\n", 
-        item.InstanceType, item.AZ, onDemand, spot, savings)
+		fmt.Printf("%-15s %-12s %-8d $%-11.4f $%-11.4f %-6.2f%%\n", item.InstanceType, item.AZ, item.Count, onDemand, spot, savings)
+
+		alternatives, err := priceClient.GetReplacementOptions(context.Background(), item, 3)
+		if err != nil {
+			log.Printf("warning: failed to find alternatives for %s/%s: %v", item.InstanceType, item.AZ, err)
+			continue
+		}
+
+		if len(alternatives) == 0 {
+			fmt.Println("  no lower-cost compatible replacements found")
+			continue
+		}
+
+		fmt.Println("  replacements with additional spot savings ($/hour):")
+		for _, alt := range alternatives {
+			fmt.Printf("  - %-12s spot=$%-10.4f save/node=$%-8.4f save/group=$%-8.4f\n",
+				alt.InstanceType, alt.SpotPrice, alt.SavingsPerNodePerHour, alt.SavingsPerGroupPerHour)
+		}
+	}
 }
+
+func newKubernetesClient() (*kubernetes.Clientset, error) {
+	home := homedir.HomeDir()
+	kubeconfig := filepath.Join(home, ".kube", "config")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return kubernetes.NewForConfig(config)
 }
