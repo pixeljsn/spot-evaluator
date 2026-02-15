@@ -24,20 +24,111 @@
 
 ```bash
 go mod tidy
+go run ./cmd/spot-evaluator
+```
+
+Backward-compatible legacy path (kept to reduce branch merge conflicts):
+
+```bash
 go run ./cmd/server
 ```
 
-## Testing
+## Review status in this environment
+
+I cannot pull from `main` in this execution environment because no git remote is configured for this local repository clone. To sync locally, run:
 
 ```bash
+git remote add origin <your-repo-url>   # only if missing
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+git checkout work
+git merge main
+```
+
+## Testing against your Kubernetes cluster
+
+### 1) Verify cluster connectivity
+
+```bash
+kubectl config current-context
+kubectl get nodes -o wide
+```
+
+You should see the worker nodes you expect. The app reads node labels for:
+- `node.kubernetes.io/instance-type`
+- `topology.kubernetes.io/zone`
+- `topology.kubernetes.io/region`
+- `eks.amazonaws.com/capacityType`
+
+### 2) Verify AWS identity/region
+
+```bash
+aws sts get-caller-identity
+aws configure list
+```
+
+If you use profiles, export one before running:
+
+```bash
+export AWS_PROFILE=<profile-name>
+export AWS_REGION=<region>
+```
+
+### 3) Install dependencies and run tests
+
+```bash
+go mod tidy
 go test ./...
 ```
 
-If your environment blocks module downloads, set an accessible GOPROXY or run tests in an environment with internet access to fetch dependencies.
+If your corporate network blocks `proxy.golang.org`, configure an internal proxy:
+
+```bash
+go env -w GOPROXY=https://<your-internal-go-proxy>,direct
+```
+
+### 4) Run the evaluator
+
+```bash
+go run ./cmd/spot-evaluator
+```
+
+Backward-compatible legacy path (kept to reduce branch merge conflicts):
+
+```bash
+go run ./cmd/server
+```
+
+Expected output sections:
+- current node-group pricing table (instance, AZ, count, on-demand, spot, savings %)
+- replacement recommendations with:
+  - replacement instance type
+  - replacement spot price
+  - savings per node per hour
+  - savings per group per hour
+
+### 5) Optional: build a binary and run in CI/staging
+
+```bash
+go build -o bin/spot-evaluator ./cmd/spot-evaluator
+./bin/spot-evaluator
+
+# legacy compatible build path
+go build -o bin/server ./cmd/server
+```
+
+### 6) Troubleshooting checklist
+
+- **`missing go.sum entry`**: run `go mod tidy` where dependency egress is allowed.
+- **Kubernetes auth errors**: check `KUBECONFIG` and current context.
+- **AWS AccessDenied**: validate IAM permissions listed above.
+- **No spot results for AZ/type**: verify the worker instance type and AZ are valid in your account/region.
 
 ## Project Layout
 
-- `cmd/server/main.go` - CLI entrypoint.
+- `cmd/spot-evaluator/main.go` - primary CLI entrypoint for the `spot-evaluator` tool.
+- `cmd/server/main.go` - legacy-compatible entrypoint retained to reduce merge conflicts with older branches.
 - `internal/collector/` - Kubernetes node inventory collection.
 - `internal/pricing/` - AWS Spot/On-Demand pricing and replacement logic.
 - `pkg/models/` - Shared data models.
