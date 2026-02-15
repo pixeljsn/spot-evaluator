@@ -64,18 +64,53 @@ func (pc *PriceClient) GetOnDemandPrice(ctx context.Context, instType, region st
 		{Field: aws.String("capacitystatus"), Type: ptypes.FilterTypeTermMatch, Value: aws.String("Used")},
 	}
 
-	out, err := pc.PricingClient.GetProducts(ctx, &pricing.GetProductsInput{
+	input := &pricing.GetProductsInput{
 		ServiceCode: aws.String("AmazonEC2"),
 		Filters:     filters,
-	})
-	if err != nil {
-		return 0, err
-	}
-	if len(out.PriceList) == 0 {
-		return 0, fmt.Errorf("no on-demand price found for %s", instType)
+		MaxResults:  aws.Int32(100),
 	}
 
-	return parseOnDemandUSDPrice(out.PriceList[0])
+	var parseErr error
+	for {
+		out, err := pc.PricingClient.GetProducts(ctx, input)
+		if err != nil {
+			return 0, err
+		}
+
+		price, err := findOnDemandUSDPrice(out.PriceList)
+		if err == nil {
+			return price, nil
+		}
+		parseErr = err
+
+		if aws.ToString(out.NextToken) == "" {
+			break
+		}
+		input.NextToken = out.NextToken
+	}
+
+	if parseErr != nil {
+		return 0, fmt.Errorf("no usable on-demand price found for %s in %s: %w", instType, region, parseErr)
+	}
+
+	return 0, fmt.Errorf("no on-demand price found for %s in %s", instType, region)
+}
+
+func findOnDemandUSDPrice(priceList []string) (float64, error) {
+	var parseErr error
+	for _, item := range priceList {
+		price, err := parseOnDemandUSDPrice(item)
+		if err == nil {
+			return price, nil
+		}
+		parseErr = err
+	}
+
+	if parseErr != nil {
+		return 0, parseErr
+	}
+
+	return 0, fmt.Errorf("no pricing payloads returned")
 }
 
 func parseOnDemandUSDPrice(priceListItem string) (float64, error) {
